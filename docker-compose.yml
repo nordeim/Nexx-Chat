@@ -1,0 +1,82 @@
+# =============================================================================
+# Neural Terminal - Docker Compose Configuration
+# =============================================================================
+#
+# Usage:
+#   docker-compose up -d          # Start in background
+#   docker-compose logs -f        # Follow logs
+#   docker-compose down           # Stop and remove
+#   docker-compose down -v        # Stop and remove with volumes (WARNING: deletes data)
+#
+# =============================================================================
+
+version: '3.8'
+
+services:
+  neural-terminal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: neural-terminal:latest
+    container_name: neural-terminal
+    restart: unless-stopped
+    
+    ports:
+      - "8501:8501"
+    
+    environment:
+      # Required: Get from https://openrouter.ai/
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      
+      # Optional: Override defaults
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-openai/gpt-3.5-turbo}
+      - DATABASE_URL=sqlite:////app/data/neural_terminal.db
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      
+      # Streamlit configuration
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    
+    volumes:
+      # Persistent data storage (conversations, settings)
+      - neural_terminal_data:/app/data
+      
+      # Optional: Mount local database for development
+      # - ./neural_terminal.db:/app/data/neural_terminal.db
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    read_only: false  # Need write access for SQLite
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volumes for persistent storage
+volumes:
+  neural_terminal_data:
+    driver: local

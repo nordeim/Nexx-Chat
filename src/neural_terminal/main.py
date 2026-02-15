@@ -1,0 +1,451 @@
+"""Main application orchestration for Neural Terminal.
+
+Provides the high-level application coordination between
+UI components and business logic.
+"""
+
+import asyncio
+from typing import Optional, List, Dict, Any, AsyncGenerator
+from decimal import Decimal
+
+import streamlit as st
+
+from .app_state import ApplicationState, get_app_state, AppConfig
+from .components.styles import StyleManager, inject_css
+from .components.themes import ThemeRegistry
+from .components.chat_container import ChatContainer, MessageViewModel
+from .components.header import Header, HeaderConfig, Sidebar
+from .components.status_bar import StatusBar, StatusInfo, CostDisplay
+from .components.message_renderer import MessageRenderer
+from .components.error_handler import ErrorHandler
+
+
+class NeuralTerminalApp:
+    """Main Neural Terminal application class.
+    
+    Coordinates all UI components and business logic to provide
+    a complete chat interface.
+    """
+    
+    # Available OpenRouter models
+    AVAILABLE_MODELS = [
+        ("openai/gpt-4-turbo", "GPT-4 Turbo"),
+        ("openai/gpt-4", "GPT-4"),
+        ("openai/gpt-3.5-turbo", "GPT-3.5 Turbo"),
+        ("anthropic/claude-3-opus", "Claude 3 Opus"),
+        ("anthropic/claude-3-sonnet", "Claude 3 Sonnet"),
+        ("google/gemini-pro", "Gemini Pro"),
+        ("meta-llama/llama-2-70b-chat", "Llama 2 70B"),
+        ("mistral/mistral-medium", "Mistral Medium"),
+    ]
+    
+    def __init__(self):
+        """Initialize application."""
+        self._app_state = get_app_state()
+        self._style_manager = StyleManager()
+        self._chat_container = ChatContainer()
+        self._header = Header(HeaderConfig())
+        self._sidebar = Sidebar()
+        self._status_bar = StatusBar()
+        self._cost_display = CostDisplay()
+        self._error_handler = ErrorHandler()
+        self._message_renderer = MessageRenderer()
+    
+    def setup(self) -> None:
+        """Setup application on first run."""
+        # Page configuration
+        st.set_page_config(
+            page_title="Neural Terminal",
+            page_icon="⚡",
+            layout="wide",
+            initial_sidebar_state="expanded",
+        )
+        
+        # Initialize app state
+        try:
+            self._app_state.initialize()
+        except Exception as e:
+            self._error_handler.show_startup_error(str(e))
+            return
+        
+        # Apply theme
+        theme_name = self._app_state.config.theme
+        try:
+            theme = ThemeRegistry.get_theme(theme_name)
+            inject_css(theme)
+        except Exception:
+            inject_css()  # Use default
+    
+    def run(self) -> None:
+        """Run the main application loop."""
+        # Setup
+        self.setup()
+        
+        # Check for initialization errors
+        if self._app_state.session.error_message:
+            self._error_handler.show_error(self._app_state.session.error_message)
+            return
+        
+        # Render sidebar
+        self._render_sidebar()
+        
+        # Render main content based on current page
+        if self._app_state.session.current_page == "chat":
+            self._render_chat_page()
+        elif self._app_state.session.current_page == "settings":
+            self._render_settings_page()
+        else:
+            self._render_chat_page()
+    
+    def _render_sidebar(self) -> None:
+        """Render sidebar with conversation list and settings."""
+        with st.sidebar:
+            st.title("⚡ Neural Terminal")
+            
+            # New conversation button
+            if st.button("➕ New Conversation", use_container_width=True):
+                self._app_state.create_conversation()
+                st.rerun()
+            
+            st.divider()
+            
+            # Conversation list
+            st.subheader("Conversations")
+            
+            conversations = self._app_state.session.conversations
+            
+            if not conversations:
+                st.caption("No conversations yet")
+            else:
+                for conv in conversations:
+                    col1, col2 = st.columns([4, 1])
+                    
+                    with col1:
+                        title = conv.get("title", "Untitled")[:30]
+                        is_current = conv["id"] == self._app_state.session.current_conversation_id
+                        
+                        button_type = "primary" if is_current else "secondary"
+                        if st.button(
+                            title,
+                            key=f"conv_{conv['id']}",
+                            use_container_width=True,
+                            type=button_type,
+                        ):
+                            self._app_state.set_current_conversation(conv["id"])
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("🗑️", key=f"del_{conv['id']}", help="Delete"):
+                            self._app_state.delete_conversation(conv["id"])
+                            st.rerun()
+            
+            st.divider()
+            
+            # Cost summary
+            st.subheader("Session Cost")
+            total_cost = self._app_state.session.total_cost
+            budget = self._app_state.config.budget_limit
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Spent", f"${float(total_cost):.4f}")
+            with col2:
+                if budget:
+                    remaining = budget - total_cost
+                    st.metric("Remaining", f"${float(remaining):.4f}")
+                else:
+                    st.metric("Budget", "∞")
+            
+            if budget and budget > 0:
+                progress = float(total_cost / budget)
+                st.progress(min(progress, 1.0), text=f"{progress*100:.1f}% used")
+            
+            st.divider()
+            
+            # Navigation
+            st.subheader("Navigation")
+            
+            if st.button("💬 Chat", use_container_width=True):
+                self._app_state.session.current_page = "chat"
+                st.rerun()
+            
+            if st.button("⚙️ Settings", use_container_width=True):
+                self._app_state.session.current_page = "settings"
+                st.rerun()
+            
+            # Help expander
+            with st.expander("❓ Help"):
+                st.markdown("""
+                **Keyboard Shortcuts:**
+                - Enter: Send message
+                - Shift+Enter: New line
+                
+                **Tips:**
+                - Use code blocks with ```language
+                - Set a budget to track costs
+                - Switch models anytime
+                """)
+    
+    def _render_chat_page(self) -> None:
+        """Render main chat interface."""
+        # Header
+        is_connected = self._app_state.orchestrator is not None
+        
+        self._header.render(
+            is_connected=is_connected,
+            available_models=self.AVAILABLE_MODELS,
+            selected_model=self._app_state.config.default_model,
+            on_model_change=self._on_model_change,
+        )
+        
+        # Status bar
+        status = StatusInfo(
+            total_cost=self._app_state.session.total_cost,
+            budget_limit=self._app_state.config.budget_limit,
+            total_tokens=self._app_state.session.total_tokens,
+            message_count=self._app_state.session.message_count,
+            current_model=self._app_state.config.default_model,
+            is_streaming=self._app_state.session.is_streaming,
+            connection_status="connected" if is_connected else "disconnected",
+        )
+        
+        self._status_bar.render_compact(status)
+        self._status_bar.render_budget_warning(status)
+        
+        st.divider()
+        
+        # Chat messages area
+        messages = self._app_state.get_conversation_messages()
+        
+        if not messages and not self._app_state.session.current_conversation_id:
+            # Welcome message
+            self._render_welcome()
+        else:
+            # Display conversation
+            self._render_messages(messages)
+        
+        # Show streaming content if active
+        if self._app_state.session.is_streaming:
+            self._chat_container.render_streaming_message(
+                self._app_state.session.streaming_content,
+            )
+        
+        # Input area
+        self._render_input()
+    
+    def _render_welcome(self) -> None:
+        """Render welcome message for new users."""
+        st.markdown("""
+        <div style="text-align: center; padding: 3rem 1rem;">
+            <h1 style="color: var(--nt-accent-primary);">⚡ Welcome to Neural Terminal</h1>
+            <p style="color: var(--nt-text-secondary); font-size: 1.2rem;">
+                Your production-grade AI chat interface
+            </p>
+            <br>
+            <p>
+                Start a new conversation from the sidebar or just type a message below.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    def _render_messages(self, messages: List[Dict[str, Any]]) -> None:
+        """Render message history.
+        
+        Args:
+            messages: List of message dictionaries
+        """
+        for msg in messages:
+            view_model = MessageViewModel(
+                role=msg["role"],
+                content=msg["content"],
+                cost=Decimal(msg.get("cost", "0")),
+                tokens=msg.get("tokens", 0),
+            )
+            self._chat_container.render_message(view_model)
+    
+    def _render_input(self) -> None:
+        """Render message input area."""
+        st.divider()
+        
+        # Use a form for better control
+        with st.container():
+            col1, col2 = st.columns([6, 1])
+            
+            with col1:
+                prompt = st.text_area(
+                    "Message",
+                    placeholder="Type your message here... (Shift+Enter for new line)",
+                    label_visibility="collapsed",
+                    height=80,
+                    key="message_input",
+                )
+            
+            with col2:
+                st.write("")  # Spacer
+                st.write("")
+                
+                disabled = (
+                    self._app_state.session.is_streaming
+                    or not prompt.strip()
+                )
+                
+                if st.button(
+                    "Send",
+                    use_container_width=True,
+                    disabled=disabled,
+                    type="primary",
+                ):
+                    self._handle_send_message(prompt)
+    
+    def _handle_send_message(self, content: str) -> None:
+        """Handle sending a message.
+        
+        Args:
+            content: Message content
+        """
+        if not content.strip():
+            return
+        
+        # Clear input
+        st.session_state["message_input"] = ""
+        
+        # Run async message sending
+        try:
+            self._run_async_send(content)
+        except Exception as e:
+            self._error_handler.show_error(f"Failed to send message: {e}")
+    
+    def _run_async_send(self, content: str) -> None:
+        """Run async message sending in sync context.
+        
+        Args:
+            content: Message content
+        """
+        from .components.stream_bridge import run_async
+        
+        async def send():
+            chunks = []
+            async for chunk in self._app_state.send_message(content):
+                chunks.append(chunk)
+            return "".join(chunks)
+        
+        try:
+            result = run_async(send())
+            st.rerun()
+        except Exception as e:
+            raise e
+    
+    def _on_model_change(self, model: str) -> None:
+        """Handle model selection change.
+        
+        Args:
+            model: Selected model ID
+        """
+        self._app_state.update_config(default_model=model)
+        st.toast(f"Switched to {model}")
+    
+    def _render_settings_page(self) -> None:
+        """Render settings configuration page."""
+        st.title("⚙️ Settings")
+        
+        # API Configuration
+        st.subheader("API Configuration")
+        
+        api_key = st.text_input(
+            "OpenRouter API Key",
+            value=self._app_state.config.openrouter_api_key,
+            type="password",
+            help="Your OpenRouter API key. Get one at openrouter.ai",
+        )
+        
+        # Model Settings
+        st.subheader("Model Settings")
+        
+        model = st.selectbox(
+            "Default Model",
+            options=[m[0] for m in self.AVAILABLE_MODELS],
+            format_func=lambda x: next((m[1] for m in self.AVAILABLE_MODELS if m[0] == x), x),
+            index=[m[0] for m in self.AVAILABLE_MODELS].index(
+                self._app_state.config.default_model
+            ) if self._app_state.config.default_model in [m[0] for m in self.AVAILABLE_MODELS] else 0,
+        )
+        
+        temperature = st.slider(
+            "Temperature",
+            min_value=0.0,
+            max_value=2.0,
+            value=self._app_state.config.temperature,
+            step=0.1,
+            help="Higher = more creative, Lower = more deterministic",
+        )
+        
+        max_tokens = st.number_input(
+            "Max Tokens per Message",
+            min_value=100,
+            max_value=8000,
+            value=self._app_state.config.max_tokens_per_message,
+            step=100,
+        )
+        
+        # Budget Settings
+        st.subheader("Budget Settings")
+        
+        enable_budget = st.checkbox(
+            "Enable Budget Limit",
+            value=self._app_state.config.budget_limit is not None,
+        )
+        
+        if enable_budget:
+            budget = st.number_input(
+                "Budget Limit ($)",
+                min_value=0.1,
+                max_value=1000.0,
+                value=float(self._app_state.config.budget_limit or 10.0),
+                step=0.5,
+            )
+            budget_decimal = Decimal(str(budget))
+        else:
+            budget_decimal = None
+        
+        # Theme Settings
+        st.subheader("Appearance")
+        
+        theme = st.selectbox(
+            "Theme",
+            options=["terminal", "amber", "minimal"],
+            format_func=lambda x: {
+                "terminal": "Terminal Green",
+                "amber": "Cyberpunk Amber",
+                "minimal": "Minimal Dark",
+            }.get(x, x),
+            index=["terminal", "amber", "minimal"].index(self._app_state.config.theme),
+        )
+        
+        # Save button
+        st.divider()
+        
+        if st.button("💾 Save Settings", type="primary", use_container_width=True):
+            self._app_state.update_config(
+                openrouter_api_key=api_key,
+                default_model=model,
+                temperature=temperature,
+                max_tokens_per_message=max_tokens,
+                budget_limit=budget_decimal,
+                theme=theme,
+            )
+            
+            st.success("Settings saved!")
+            
+            # Apply theme immediately
+            if theme != self._app_state.config.theme:
+                st.rerun()
+
+
+def main() -> None:
+    """Main application entry point."""
+    app = NeuralTerminalApp()
+    app.run()
+
+
+if __name__ == "__main__":
+    main()
