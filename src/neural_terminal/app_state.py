@@ -177,22 +177,18 @@ class ApplicationState:
                 recovery_timeout=30.0,
             )
             
-            openrouter = OpenRouterClient(
-                api_key=self.config.openrouter_api_key or settings.openrouter_api_key,
-                circuit_breaker=circuit_breaker,
-            )
+            openrouter = OpenRouterClient()
             
             tokenizer = TokenCounter()
             repository = SQLiteConversationRepository()
             
             # Initialize orchestrator
             self._orchestrator = ChatOrchestrator(
-                openrouter_client=openrouter,
-                conversation_repository=repository,
-                token_counter=tokenizer,
+                repository=repository,
+                openrouter=openrouter,
                 event_bus=self._event_bus,
+                token_counter=tokenizer,
                 circuit_breaker=circuit_breaker,
-                cost_tracker=cost_tracker,
             )
             
             # Subscribe to events
@@ -251,7 +247,7 @@ class ApplicationState:
             self.session.conversations = [
                 {
                     "id": str(c.id),
-                    "title": c.title,
+                    "title": c.title or "Untitled",  # Handle None titles
                     "created_at": c.created_at.isoformat() if c.created_at else "",
                     "total_cost": str(c.total_cost),
                 }
@@ -278,11 +274,13 @@ class ApplicationState:
         Args:
             conversation_id: Conversation ID or None
         """
+        from uuid import UUID
+        
         self.session.current_conversation_id = conversation_id
         
         if conversation_id and self._orchestrator:
             try:
-                conversation = self._orchestrator.get_conversation(conversation_id)
+                conversation = self._orchestrator.get_conversation(UUID(conversation_id))
                 self._state_manager.set_conversation(conversation)
             except Exception:
                 pass
@@ -341,18 +339,20 @@ class ApplicationState:
         Returns:
             List of message dictionaries
         """
+        from uuid import UUID
+        
         if not self._orchestrator or not self.session.current_conversation_id:
             return []
         
         try:
             messages = self._orchestrator.get_conversation_messages(
-                self.session.current_conversation_id,
+                UUID(self.session.current_conversation_id),
             )
             return [
                 {
-                    "role": m.role,
+                    "role": m.role.value if hasattr(m.role, 'value') else m.role,
                     "content": m.content,
-                    "timestamp": m.timestamp.isoformat() if m.timestamp else "",
+                    "timestamp": m.created_at.isoformat() if m.created_at else "",
                     "cost": str(m.cost) if m.cost else "0",
                     "tokens": m.token_usage.total_tokens if m.token_usage else 0,
                 }
@@ -370,6 +370,8 @@ class ApplicationState:
         Yields:
             Stream chunks
         """
+        from uuid import UUID
+        
         if not self._orchestrator:
             raise RuntimeError("Application not initialized")
         
@@ -381,19 +383,18 @@ class ApplicationState:
         self.session.streaming_content = ""
         
         try:
-            async for chunk, error in self._orchestrator.send_message(
-                conversation_id=self.session.current_conversation_id,
+            # Convert string UUID to UUID object
+            conv_id = UUID(self.session.current_conversation_id)
+            
+            async for delta, metadata in self._orchestrator.send_message(
+                conversation_id=conv_id,
                 content=content,
                 temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens_per_message,
-                model=self.config.default_model,
             ):
-                if error:
-                    raise error
-                
-                if chunk:
-                    self.session.streaming_content += chunk
-                    yield chunk
+                # delta is the text chunk, metadata is None for streaming, dict for final
+                if delta:
+                    self.session.streaming_content += delta
+                    yield delta
         
         finally:
             self.session.is_streaming = False

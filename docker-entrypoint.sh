@@ -94,14 +94,14 @@ health_check() {
 # =============================================================================
 start_app() {
     log_info "Starting Neural Terminal..."
-    log_info "Streamlit will be available at: http://localhost:${STREAMLIT_SERVER_PORT:-8501}"
+    log_info "Streamlit will be available at: http://localhost:${STREAMLIT_SERVER_PORT:-7860}"
     
     # Set PYTHONPATH to include src directory
     export PYTHONPATH=/app/src:${PYTHONPATH:-}
     
     # Run Streamlit
     exec streamlit run /app/app.py \
-        --server.port=${STREAMLIT_SERVER_PORT:-8501} \
+        --server.port=${STREAMLIT_SERVER_PORT:-7860} \
         --server.address=0.0.0.0 \
         --server.headless=true \
         --server.enableCORS=false \

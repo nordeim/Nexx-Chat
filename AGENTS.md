@@ -815,7 +815,7 @@ services:
   neural-terminal:
     image: neural-terminal:latest
     ports:
-      - "8501:8501"
+      - "7860:7860"
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - DATABASE_URL=sqlite:////app/data/neural_terminal.db

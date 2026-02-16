@@ -1,7 +1,7 @@
 # Neural Terminal - Makefile
 # Standard commands for development workflow
 
-.PHONY: help install update test test-unit test-integration test-e2e test-coverage lint format format-check migrate migrate-create run db-init db-backup db-vacuum db-stats db-health docker-build docker-run docker-compose-up docker-compose-down docker-push clean
+.PHONY: help install update test test-unit test-integration test-e2e test-coverage lint format format-check migrate migrate-create run db-init db-backup db-vacuum db-stats db-health db-purge db-purge-days db-purge-all db-purge-dry-run docker-build docker-run docker-compose-up docker-compose-down docker-push clean
 
 # Default target
 help:
@@ -36,6 +36,12 @@ help:
 	@echo "  make db-vacuum        Vacuum database to reclaim space"
 	@echo "  make db-stats         Show database statistics"
 	@echo "  make db-health        Check database health"
+	@echo ""
+	@echo "Data Purge:"
+	@echo "  make db-purge         Purge conversations older than 30 days"
+	@echo "  make db-purge-days DAYS=7   Purge conversations older than N days"
+	@echo "  make db-purge-all     Purge ALL conversations"
+	@echo "  make db-purge-dry-run Show what would be purged (no changes)"
 	@echo ""
 	@echo "Docker:"
 	@echo "  make docker-build        Build Docker image"
@@ -130,10 +136,29 @@ db-health:
 	PYTHONPATH=src poetry run python scripts/health_check.py
 
 # ============================================================================
+# Data Management
+# ============================================================================
+db-purge:
+	@echo "Purging conversations older than 30 days..."
+	PYTHONPATH=src poetry run python scripts/purge_conversations.py
+
+db-purge-days:
+	@echo "Purging conversations older than $(DAYS) days..."
+	PYTHONPATH=src poetry run python scripts/purge_conversations.py --days $(DAYS)
+
+db-purge-all:
+	@echo "Purging ALL conversations..."
+	PYTHONPATH=src poetry run python scripts/purge_conversations.py --all
+
+db-purge-dry-run:
+	@echo "Showing what would be purged (dry run)..."
+	PYTHONPATH=src poetry run python scripts/purge_conversations.py --dry-run
+
+# ============================================================================
 # Application
 # ============================================================================
 run:
-	poetry run streamlit run src/neural_terminal/app.py
+	poetry run streamlit run app.py --server.port=7860
 
 # ============================================================================
 # Docker
@@ -144,7 +169,7 @@ docker-build:
 
 docker-run:
 	@echo "Running Docker container..."
-	docker run -p 8501:8501 \
+	docker run -p 7860:7860 \
 		-e OPENROUTER_API_KEY=$(OPENROUTER_API_KEY) \
 		-v $(PWD)/data:/app/data \
 		neural-terminal:latest

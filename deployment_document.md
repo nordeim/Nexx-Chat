@@ -88,7 +88,7 @@
   make docker-run OPENROUTER_API_KEY=your-key
 
   # Or directly
-  docker run -p 8501:8501 \
+  docker run -p 7860:7860 \
     -e OPENROUTER_API_KEY=xxx \
     -v $(pwd)/data:/app/data \
     neural-terminal:latest
@@ -99,7 +99,7 @@
   Health Checks
 
   HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-      CMD curl -f http://localhost:8501/_stcore/health || exit 1
+      CMD curl -f http://localhost:7860/_stcore/health || exit 1
 
   Entrypoint Commands
 
@@ -125,7 +125,7 @@
   Services
 
   • neural-terminal: Main application
-    • Port: 8501
+    • Port: 7860
     • Auto-restart: unless-stopped
     • Health checks enabled
     • Resource limits: 2 CPU, 2GB RAM
@@ -152,7 +152,7 @@
   1. Build the image:
      make docker-build
   2. Test locally:
-     docker run -p 8501:8501 -e OPENROUTER_API_KEY=xxx neural-terminal:latest
+     docker run -p 7860:7860 -e OPENROUTER_API_KEY=xxx neural-terminal:latest
   3. Deploy with compose:
      docker-compose up -d
   4. Push to registry (optional):

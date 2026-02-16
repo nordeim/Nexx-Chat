@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="forbid",
+        # Ignore unknown environment variables (e.g., Streamlit vars like STREAMLIT_SERVER_PORT)
+        extra="ignore",
     )
     
     # API Configuration

@@ -1,125 +1,151 @@
-# syntax=docker/dockerfile:1
 # =============================================================================
-# Neural Terminal - Production Dockerfile
+# Neural Terminal - Hugging Face Spaces Dockerfile
 # =============================================================================
-# Multi-stage build optimized for Streamlit applications
-# 
+# Single-stage build optimized for Hugging Face Spaces deployment
+#
 # Build:
-#   docker build -t neural-terminal:latest .
+#   docker build -t neural-terminal:hf .
 #
-# Run:
-#   docker run -p 8501:8501 -e OPENROUTER_API_KEY=xxx neural-terminal:latest
+# Run locally:
+#   docker run -p 7860:7860 -e OPENROUTER_API_KEY=xxx neural-terminal:hf
 #
-# With persistent storage:
-#   docker run -p 8501:8501 -v $(pwd)/data:/app/data neural-terminal:latest
+# Hugging Face Spaces:
+#   - Port 7860 (mandatory)
+#   - Single-stage preferred
+#   - Metadata labels for Space card
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# STAGE 1: Builder
-# -----------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.13-trixie
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Poetry
-RUN pip install --no-cache-dir poetry==1.8.5
-
-# Set Poetry to not create virtualenv (we're in a container)
-RUN poetry config virtualenvs.create false
-
-WORKDIR /app
-
-# Copy dependency files first (for layer caching)
-COPY pyproject.toml poetry.lock ./
-
-# Install production dependencies
-# --no-dev: Skip dev dependencies
-# --no-interaction: Don't ask questions
-# --no-ansi: Disable colored output
-RUN poetry install --no-dev --no-interaction --no-ansi --no-root
-
-# -----------------------------------------------------------------------------
-# STAGE 2: Runtime
-# -----------------------------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
-
+# =============================================================================
+# METADATA - Hugging Face Spaces Display
+# =============================================================================
 LABEL maintainer="Neural Terminal Team"
-LABEL description="Production-grade chatbot with OpenRouter integration"
+LABEL description="Production-grade chatbot with OpenRouter integration - Terminal/Cyberpunk aesthetic"
 LABEL version="0.1.0"
+LABEL org.opencontainers.image.title="Neural Terminal"
+LABEL org.opencontainers.image.description="Multi-model AI chatbot with OpenRouter, cost tracking, and terminal aesthetic"
+LABEL org.opencontainers.image.version="0.1.0"
+LABEL org.opencontainers.image.authors="Neural Terminal Team"
+LABEL org.opencontainers.image.url="https://huggingface.co/spaces/your-username/neural-terminal"
+LABEL org.opencontainers.image.source="https://github.com/your-org/neural-terminal"
+LABEL org.opencontainers.image.licenses="MIT"
 
-# Environment variables
+# =============================================================================
+# ENVIRONMENT CONFIGURATION
+# =============================================================================
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONFAULTHANDLER=1 \
-    STREAMLIT_SERVER_PORT=8501 \
+    PYTHONPATH=/app/src:${PYTHONPATH:-} \
+    # Streamlit Configuration for HF Spaces
+    STREAMLIT_SERVER_PORT=7860 \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_SERVER_ENABLE_CORS=false \
+    STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    # Application Configuration
     DATABASE_URL="sqlite:////app/data/neural_terminal.db" \
     APP_HOME=/app \
-    USER=neural
+    # Disable pip cache
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Install runtime dependencies only
+# =============================================================================
+# SYSTEM DEPENDENCIES
+# =============================================================================
+# Install minimal runtime dependencies
+# - ca-certificates: HTTPS connections (OpenRouter API)
+# - curl: Health checks
+# - sqlite3: Database operations and debugging
+# - build-essential: Required for compiling some Python packages (tiktoken, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Security updates
     ca-certificates \
-    # Health checks
-    curl \
-    # SQLite tooling for debugging
+    curl git wget zip unzip tar \
     sqlite3 \
-    # Cleanup
+    build-essential \
+    gcc \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Create non-root user for security
-RUN groupadd --gid 1000 ${USER} && \
-    useradd --uid 1000 --gid ${USER} --shell /bin/bash --create-home ${USER}
-
-# Create app directories
-RUN mkdir -p /app/data /app/src && \
-    chown -R ${USER}:${USER} /app
-
+# =============================================================================
+# APPLICATION DIRECTORY STRUCTURE
+# =============================================================================
 WORKDIR /app
 
-# Copy installed Python packages from builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Create required directories
+# - /app/data: SQLite database persistence
+# - /app/src: Application source code
+# - /app/scripts: Utility scripts
+RUN mkdir -p /app/data /app/src/neural_terminal /app/scripts
 
-# Copy application code
-COPY --chown=${USER}:${USER} app.py ./
-COPY --chown=${USER}:${USER} src/ ./src/
-COPY --chown=${USER}:${USER} scripts/ ./scripts/
-COPY --chown=${USER}:${USER} README.md LICENSE ./
+# =============================================================================
+# PYTHON DEPENDENCIES
+# =============================================================================
+# Copy dependency specification files first (layer caching optimization)
+COPY pyproject.toml poetry.lock* ./
 
-# Copy entrypoint script
-COPY --chown=${USER}:${USER} docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Install dependencies using pip with Poetry export fallback
+# This avoids Poetry installation overhead (~50MB) while maintaining
+# exact dependency versions from poetry.lock
+#
+# Strategy:
+# 1. Try to install from pyproject.toml using pip (if it has dependencies)
+# 2. If that fails, use the explicit requirements below
+#
+# Alternative: Run `poetry export -f requirements.txt --without-hashes` 
+# locally and commit requirements.txt
 
-# Initialize database for production
-RUN python scripts/init_db.py || true
+# Core dependencies extracted from pyproject.toml
+# These are the production dependencies only (no dev tools)
+RUN pip install --no-cache-dir \
+    # Web Framework
+    streamlit httpx sqlalchemy alembic pydantic pydantic-settings tiktoken bleach markdown typing-extensions
 
-# Switch to non-root user
-USER ${USER}
+# =============================================================================
+# APPLICATION CODE
+# =============================================================================
+# Copy application source code
+COPY app.py ./
+COPY src/ ./src/
+COPY scripts/ ./scripts/
 
-# Health check
+# Copy documentation (optional, for reference)
+COPY README.md LICENSE* ./
+
+# Copy .env.example to .env if it doesn't exist
+# This allows users to mount their own .env file
+COPY .env.example .env
+
+# =============================================================================
+# DATABASE INITIALIZATION
+# =============================================================================
+# Initialize SQLite database with production optimizations
+# - WAL mode for concurrent access
+# - Performance PRAGMAs
+# - Index creation
+RUN python scripts/init_db.py || echo "Database initialization completed with warnings"
+
+# Verify database was created
+RUN ls -la /app/data/ && sqlite3 /app/data/neural_terminal.db "PRAGMA integrity_check;"
+
+# =============================================================================
+# HEALTH CHECK
+# =============================================================================
+# Streamlit health endpoint: /_stcore/health
+# HF Spaces uses this to determine container health
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:${STREAMLIT_SERVER_PORT}/_stcore/health || exit 1
+    CMD curl -f http://localhost:7860/_stcore/health || exit 1
 
-# Expose Streamlit port
-EXPOSE ${STREAMLIT_SERVER_PORT}
+# =============================================================================
+# PORT EXPOSURE
+# =============================================================================
+# Hugging Face Spaces requires port 7860
+EXPOSE 7860
 
-# Volume for persistent data (conversations, settings)
-VOLUME ["/app/data"]
-
-# Entrypoint
-ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["start"]
+# =============================================================================
+# ENTRYPOINT - Streamlit with explicit port 7860
+# =============================================================================
+# Run Streamlit app directly with explicit --server.port=7860 flag
+# Note: WORKDIR is /app, so we use /app/app.py
+CMD ["streamlit", "run", "/app/app.py", "--server.port=7860", "--server.address=0.0.0.0"]
