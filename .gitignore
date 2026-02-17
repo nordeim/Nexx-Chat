@@ -8,3 +8,5 @@ __pycache__/
 bak.git/
 .git/
 *.pyc
+.git.2/
+.env

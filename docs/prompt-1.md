@@ -8,3 +8,6 @@ Awesome job on your meticulous review, analysis and planning. Please keep up the
 
 Awesome job on your meticulous analysis, planning and execution. Please keep up the good work in your rigorous and meticulous approach to planning and execution. Yes, please meticulously plan and then proceed to execute Phase 1.
 
+---
+
+please meticulously review and analyze @fix_log.md , @README.md and @code_review.md in that order to have a deep understanding of the project and its codebase design and architecture. Next, meticulously validate your deep understanding against the actual codebase. Review and audit the codebase for any potential issues/gaps or vulnerabilities.
