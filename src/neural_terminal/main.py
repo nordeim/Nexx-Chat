@@ -336,20 +336,12 @@ class NeuralTerminalApp:
                     disabled=False,  # Always active - no state management
                     type="primary",
                 ):
-                    # Debug: Log button click
-                    import sys
-                    print(f"[DEBUG] Send button clicked!", file=sys.stderr)
-                    
                     # Grab whatever is in the input box right now
                     current_content = st.session_state.get("message_input", "")
-                    print(f"[DEBUG] Current input content: '{current_content}'", file=sys.stderr)
                     
                     # Only send if there's actual content
                     if current_content.strip():
-                        print(f"[DEBUG] Sending message: '{current_content}'", file=sys.stderr)
                         self._handle_send_message(current_content)
-                    else:
-                        print(f"[DEBUG] No content to send, ignoring click", file=sys.stderr)
     
     def _handle_send_message(self, content: str) -> None:
         """Handle sending a message.
@@ -357,26 +349,10 @@ class NeuralTerminalApp:
         Args:
             content: Message content
         """
-        import sys
-        print(f"[DEBUG] _handle_send_message called with: '{content}'", file=sys.stderr)
-        
-        if not content.strip():
-            print(f"[DEBUG] Early return - content is empty after strip", file=sys.stderr)
-            return
-        
-        print(f"[DEBUG] Current session state:", file=sys.stderr)
-        print(f"  - is_streaming: {self._app_state.session.is_streaming}", file=sys.stderr)
-        print(f"  - current_conversation_id: {self._app_state.session.current_conversation_id}", file=sys.stderr)
-        print(f"  - error_message: {self._app_state.session.error_message}", file=sys.stderr)
-        
         # Run async message sending
         try:
-            print(f"[DEBUG] About to call _run_async_send", file=sys.stderr)
             self._run_async_send(content)
         except Exception as e:
-            print(f"[DEBUG] Exception in _handle_send_message: {e}", file=sys.stderr)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
             self._error_handler.show_error(f"Failed to send message: {e}")
     
     def _run_async_send(self, content: str) -> None:
@@ -407,9 +383,7 @@ class NeuralTerminalApp:
                 raise
         
         try:
-            print(f"[DEBUG] About to call run_async", file=sys.stderr)
             result = run_async(send())
-            print(f"[DEBUG] run_async completed, result: '{result}'", file=sys.stderr)
             
             # Clear input after successful send
             if result.strip():
