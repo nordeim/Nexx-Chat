@@ -153,18 +153,15 @@ class TestChatOrchestrator:
     
     @pytest.mark.asyncio
     async def test_send_message_validates_long_input(self, setup):
-        """Test that long input is truncated (sanitized)."""
+        """Test that long input raises ValidationError."""
         orchestrator = setup["orchestrator"]
+        
         conv = orchestrator.create_conversation()
-        # Long input is now truncated instead of raising error
-        long_input = "x" * 40000
-        result = None
-        async for delta, meta in orchestrator.send_message(conv.id, long_input):
-            if meta:
-                result = meta
-        # Should succeed with truncated input
-        assert result is not None
-
+        
+        with pytest.raises(ValidationError, match="exceeds maximum length"):
+            async for _ in orchestrator.send_message(conv.id, "x" * 32001):
+                pass
+    
     @pytest.mark.asyncio
     async def test_send_message_validates_conversation_exists(self, setup):
         """Test that non-existent conversation raises ValidationError."""
@@ -246,122 +243,18 @@ class TestChatOrchestrator:
     
     @pytest.mark.asyncio
     async def test_send_message_returns_metadata(self, setup):
-            """Test that send_message returns metadata in final chunk."""
-            orchestrator = setup["orchestrator"]
-    
-            await orchestrator.load_models()
-            conv = orchestrator.create_conversation()
-    
-            final_meta = None
-            async for delta, meta in orchestrator.send_message(conv.id, "Hi"):
-                if meta:
-                    final_meta = meta
-    
-            assert final_meta is not None
-            assert "cost" in final_meta
-            assert "latency" in final_meta
-            assert "message_id" in final_meta
-
-
-class TestChatOrchestratorRateLimiting:
-    """Tests for rate limiting integration."""
-
-    @pytest.fixture
-    def setup_with_rate_limit(self):
-        """Create orchestrator with strict rate limit."""
-        event_bus = EventBus()
-        repo = SQLiteConversationRepository()
-
-        class MockOpenRouterClient:
-            async def get_available_models(self):
-                from neural_terminal.infrastructure.openrouter import OpenRouterModel
-                return [
-                    OpenRouterModel(
-                        id="meta/llama-3.1-8b-instruct",
-                        name="Llama 3.1 8B",
-                        pricing={"prompt": "0.0005", "completion": "0.001"},
-                        context_length=8192
-                    )
-                ]
-
-            async def chat_completion_stream(self, **kwargs):
-                yield {"type": "delta", "content": "Hello", "accumulated": "Hello"}
-                yield {
-                    "type": "final",
-                    "content": "Hello",
-                    "usage": TokenUsage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
-                    "latency_ms": 500,
-                    "model": "meta/llama-3.1-8b-instruct"
-                }
-
-        client = MockOpenRouterClient()
-        counter = TokenCounter()
-        circuit = CircuitBreaker()
-
-        from neural_terminal.infrastructure.rate_limiter import RateLimiter, RateLimitConfig
-        rate_limiter = RateLimiter(config=RateLimitConfig(burst_size=1))
-
-        orchestrator = ChatOrchestrator(
-            repository=repo,
-            openrouter=client,
-            event_bus=event_bus,
-            token_counter=counter,
-            circuit_breaker=circuit,
-            rate_limiter=rate_limiter
-        )
-
-        return {
-            "orchestrator": orchestrator,
-            "rate_limiter": rate_limiter,
-        }
-
-    @pytest.mark.asyncio
-    async def test_send_message_respects_rate_limit(self, setup_with_rate_limit):
-        """Test that rate limit is enforced."""
-        orchestrator = setup_with_rate_limit["orchestrator"]
-        rate_limiter = setup_with_rate_limit["rate_limiter"]
-
+        """Test that send_message returns metadata in final chunk."""
+        orchestrator = setup["orchestrator"]
+        
         await orchestrator.load_models()
         conv = orchestrator.create_conversation()
-
-        # First message should succeed
-        result = None
+        
+        final_meta = None
         async for delta, meta in orchestrator.send_message(conv.id, "Hi"):
             if meta:
-                result = meta
-
-        assert result is not None
-
-        # Second message should fail due to rate limit
-        from neural_terminal.domain.exceptions import RateLimitExceededError
-        with pytest.raises(RateLimitExceededError) as exc_info:
-            async for _ in orchestrator.send_message(conv.id, "Hi"):
-                pass
-
-        assert exc_info.value.code == "RATE_LIMIT_EXCEEDED"
-
-    @pytest.mark.asyncio
-    async def test_send_message_allows_reset(self, setup_with_rate_limit):
-        """Test that rate limiter can be reset."""
-        orchestrator = setup_with_rate_limit["orchestrator"]
-        rate_limiter = setup_with_rate_limit["rate_limiter"]
-
-        await orchestrator.load_models()
-        conv = orchestrator.create_conversation()
-
-        # Use up the token
-        async for delta, meta in orchestrator.send_message(conv.id, "Hi"):
-            if meta:
-                result = meta
-        assert result is not None
-
-        # Reset rate limiter
-        rate_limiter.reset()
-
-        # Now message should succeed
-        result2 = None
-        async for delta, meta in orchestrator.send_message(conv.id, "Hi"):
-            if meta:
-                result2 = meta
-
-        assert result2 is not None
+                final_meta = meta
+        
+        assert final_meta is not None
+        assert "cost" in final_meta
+        assert "latency" in final_meta
+        assert "message_id" in final_meta

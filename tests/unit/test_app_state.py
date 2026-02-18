@@ -20,9 +20,9 @@ class TestAppConfig:
         """Default configuration values."""
         config = AppConfig()
         
-        assert config.default_model == "meta/llama-3.1-8b-instruct"
+        assert config.default_model == "z-ai/glm5"
         assert config.budget_limit is None
-        assert config.theme == "amber"
+        assert config.theme == "terminal"
         assert config.max_tokens_per_message == 8192
         assert config.temperature == 0.7
         assert config.system_prompt == "You are a helpful assistant"
@@ -38,7 +38,7 @@ class TestAppConfig:
         # API key not stored in config (comes from .env)
         assert "openrouter_api_key" not in data
         assert data["budget_limit"] == "10.00"
-        assert data["theme"] == "amber"
+        assert data["theme"] == "terminal"
         assert data["system_prompt"] == "You are a helpful assistant"
     
     def test_to_dict_no_budget(self):
@@ -76,7 +76,7 @@ class TestAppConfig:
         config = AppConfig.from_dict(data)
         
         assert config.theme == "minimal"
-        assert config.default_model == "meta/llama-3.1-8b-instruct"  # Default
+        assert config.default_model == "z-ai/glm5"  # Default
 
 
 class TestSessionState:

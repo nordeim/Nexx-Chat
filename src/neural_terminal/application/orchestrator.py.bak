@@ -2,7 +2,6 @@
 
 Coordinates between repositories, external APIs, and event system.
 """
-
 import sys
 import time
 from decimal import Decimal
@@ -11,9 +10,7 @@ from uuid import UUID, uuid4
 
 from neural_terminal.application.events import DomainEvent, EventBus, Events
 from neural_terminal.config import settings
-from neural_terminal.infrastructure.input_sanitizer import InputSanitizer
-from neural_terminal.infrastructure.rate_limiter import RateLimiter, RateLimitConfig
-from neural_terminal.domain.exceptions import RateLimitExceededError, ValidationError
+from neural_terminal.domain.exceptions import ValidationError
 from neural_terminal.domain.models import Conversation, Message, MessageRole, TokenUsage
 from neural_terminal.infrastructure.circuit_breaker import CircuitBreaker
 from neural_terminal.infrastructure.openrouter import OpenRouterClient, OpenRouterModel
@@ -23,108 +20,99 @@ from neural_terminal.infrastructure.token_counter import TokenCounter
 
 class ChatOrchestrator:
     """Domain service managing conversation lifecycle.
-
+    
     Coordinates between repositories, external APIs, and event system.
-
+    
     Phase 0 Defect C-4 Implementation:
         For streaming, we manually check circuit state, then stream directly,
         then manually record success/failure. This avoids trying to await
         an async generator.
     """
-
+    
     def __init__(
         self,
         repository: ConversationRepository,
         openrouter: OpenRouterClient,
         event_bus: EventBus,
         token_counter: TokenCounter,
-        circuit_breaker: Optional[CircuitBreaker] = None,
-        rate_limiter: Optional[RateLimiter] = None,
+        circuit_breaker: Optional[CircuitBreaker] = None
     ):
         """Initialize orchestrator with dependencies.
-
+        
         Args:
             repository: Conversation repository
             openrouter: OpenRouter API client
             event_bus: Event bus for domain events
             token_counter: Token counter for context management
             circuit_breaker: Optional circuit breaker for resilience
-            rate_limiter: Optional rate limiter (uses config defaults if None)
         """
-        self._sanitizer = InputSanitizer()
         self._repo = repository
         self._openrouter = openrouter
         self._event_bus = event_bus
         self._tokenizer = token_counter
         self._circuit = circuit_breaker or CircuitBreaker()
-        self._rate_limiter = rate_limiter or RateLimiter(
-            config=RateLimitConfig(
-                requests_per_minute=settings.rate_limit_requests_per_minute,
-                burst_size=settings.rate_limit_burst_size,
-            )
-        )
         self._available_models: List[OpenRouterModel] = []
-
+    
     async def load_models(self) -> List[OpenRouterModel]:
         """Fetch and cache available models.
-
+        
         Returns:
             List of available models
         """
         self._available_models = await self._openrouter.get_available_models()
         return self._available_models
-
+    
     def get_model_config(self, model_id: str) -> Optional[OpenRouterModel]:
         """Get pricing and capabilities for model.
-
+        
         Args:
             model_id: Model identifier
-
+            
         Returns:
             Model configuration or None if not found
         """
         return next((m for m in self._available_models if m.id == model_id), None)
-
+    
     def update_api_key(self, api_key: str) -> None:
         """Update OpenRouter API key.
-
+        
         Args:
             api_key: New API key
         """
         self._openrouter.update_api_key(api_key)
-
+    
     def create_conversation(
         self,
         title: Optional[str] = None,
         model_id: str = "meta/llama-3.1-8b-instruct",
-        system_prompt: Optional[str] = None,
+        system_prompt: Optional[str] = None
     ) -> Conversation:
         """Initialize new conversation with optional system context.
-
+        
         Args:
             title: Optional conversation title
             model_id: Model to use
             system_prompt: Optional system prompt
-
+            
         Returns:
             Created conversation
         """
         conv = Conversation(title=title, model_id=model_id)
-
+        
         # Save conversation first (required for foreign key constraint)
         self._repo.save(conv)
-
+        
         if system_prompt:
             system_msg = Message(
                 id=uuid4(),
                 conversation_id=conv.id,
                 role=MessageRole.SYSTEM,
-                content=system_prompt,
+                content=system_prompt
             )
             self._repo.add_message(system_msg)
-
+        
         return conv
-
+    
     async def send_message(
         self,
         conversation_id: UUID,
@@ -132,102 +120,92 @@ class ChatOrchestrator:
         temperature: float = 0.7,
     ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
         """Send a message and stream the response.
-
+        
         Args:
             conversation_id: Conversation ID
             content: Message content
             temperature: Sampling temperature
-
+            
         Yields:
             Tuple of (delta_text, metadata_dict)
             metadata is None for deltas, dict with usage for final
-
+            
         Raises:
             ValidationError: If conversation not found or input invalid
         """
-        # Sanitize and validate input
-        sanitized = self._sanitizer.sanitize_with_metadata(content)
-        if not sanitized.content:
+        # Validate input
+        if not content or not content.strip():
             raise ValidationError("Message content cannot be empty", code="EMPTY_INPUT")
-        # Use sanitized content
-        content = sanitized.content
-        # Log suspicious patterns
-        if sanitized.has_suspicious_patterns:
-            print(
-                f"[WARN] Suspicious patterns detected: {sanitized.warnings}",
-                file=sys.stderr,
+        
+        if len(content) > 32000:  # Max input length
+            raise ValidationError(
+                "Message exceeds maximum length (32000 chars)",
+                code="INPUT_TOO_LONG"
             )
-
-        # Check rate limit
-        self._rate_limiter.acquire()
-
+        
         # Load conversation
         print(f"[DEBUG] Loading conversation {conversation_id}", file=sys.stderr)
         conv = self._repo.get_by_id(conversation_id)
         if not conv:
             print(f"[DEBUG] Conversation not found!", file=sys.stderr)
             raise ValidationError(f"Conversation {conversation_id} not found")
-
+        
         print(f"[DEBUG] Loaded conversation: model={conv.model_id}", file=sys.stderr)
-
+        
         # Get model config for pricing
         model_config = self.get_model_config(conv.model_id)
         print(f"[DEBUG] Model config: {model_config}", file=sys.stderr)
-
+        
         # Create user message
         user_msg = Message(
             id=uuid4(),
             conversation_id=conversation_id,
             role=MessageRole.USER,
-            content=content,
+            content=content
         )
-
+        
         # Check context length and truncate if necessary
         history = self._repo.get_messages(conversation_id)
         history.append(user_msg)
-
+        
         max_context = model_config.context_length if model_config else 4096
         truncated = self._tokenizer.truncate_context(
-            history, conv.model_id, max_context
+            history,
+            conv.model_id,
+            max_context
         )
-
+        
         if len(truncated) < len(history):
-            self._event_bus.emit(
-                DomainEvent(
-                    event_type=Events.CONTEXT_TRUNCATED,
-                    conversation_id=conversation_id,
-                    payload={
-                        "original_count": len(history),
-                        "new_count": len(truncated),
-                    },
-                )
-            )
-
+            self._event_bus.emit(DomainEvent(
+                event_type=Events.CONTEXT_TRUNCATED,
+                conversation_id=conversation_id,
+                payload={"original_count": len(history), "new_count": len(truncated)}
+            ))
+        
         # Save user message
         self._repo.add_message(user_msg)
-
+        
         # Prepare API messages
         api_messages = [
-            {"role": msg.role.value, "content": msg.content} for msg in truncated
+            {"role": msg.role.value, "content": msg.content}
+            for msg in truncated
         ]
-
+        
         # Emit start event
-        self._event_bus.emit(
-            DomainEvent(
-                event_type=Events.MESSAGE_STARTED,
-                conversation_id=conversation_id,
-                payload={"model": conv.model_id},
-            )
-        )
-
+        self._event_bus.emit(DomainEvent(
+            event_type=Events.MESSAGE_STARTED,
+            conversation_id=conversation_id,
+            payload={"model": conv.model_id}
+        ))
+        
         # Streaming
         assistant_content = ""
         final_usage: Optional[TokenUsage] = None
         latency_ms = 0
-
+        
         # Phase 0 Defect C-4: Manual circuit breaker check
         self._circuit._check_state()
-
+        
         try:
             print(f"[DEBUG] Starting stream from openrouter", file=sys.stderr)
             async for chunk in self._openrouter.chat_completion_stream(
@@ -235,42 +213,35 @@ class ChatOrchestrator:
                 model=conv.model_id,
                 temperature=temperature,
             ):
-                print(
-                    f"[DEBUG] Received chunk from openrouter: {chunk}", file=sys.stderr
-                )
-
+                print(f"[DEBUG] Received chunk from openrouter: {chunk}", file=sys.stderr)
+                
                 if chunk["type"] == "delta":
                     delta = chunk["content"]
                     assistant_content += delta
-
+                    
                     # Emit token event for cost tracking
-                    self._event_bus.emit(
-                        DomainEvent(
-                            event_type=Events.TOKEN_GENERATED,
-                            conversation_id=conversation_id,
-                            payload={"delta": delta},
-                        )
-                    )
-
+                    self._event_bus.emit(DomainEvent(
+                        event_type=Events.TOKEN_GENERATED,
+                        conversation_id=conversation_id,
+                        payload={"delta": delta}
+                    ))
+                    
                     print(f"[DEBUG] Yielding delta: '{delta}'", file=sys.stderr)
                     yield (delta, None)
-
+                
                 elif chunk["type"] == "final":
                     final_usage = chunk.get("usage")
                     latency_ms = chunk.get("latency_ms", 0)
-                    print(
-                        f"[DEBUG] Final chunk received, usage: {final_usage}",
-                        file=sys.stderr,
-                    )
-
+                    print(f"[DEBUG] Final chunk received, usage: {final_usage}", file=sys.stderr)
+            
             # Record success
             self._circuit._on_success()
-
+            
             # Calculate cost
             cost = Decimal("0")
             if final_usage and model_config:
                 cost = self._calculate_cost(final_usage, model_config)
-
+            
             # Save assistant message
             assistant_msg = Message(
                 id=uuid4(),
@@ -280,42 +251,37 @@ class ChatOrchestrator:
                 token_usage=final_usage,
                 cost=cost,
                 latency_ms=latency_ms,
-                model_id=conv.model_id,
+                model_id=conv.model_id
             )
             self._repo.add_message(assistant_msg)
-
+            
             # Update conversation
             conv.update_cost(cost)
             self._repo.save(conv)
-
+            
             # Emit completion
-            self._event_bus.emit(
-                DomainEvent(
-                    event_type=Events.MESSAGE_COMPLETED,
-                    conversation_id=conversation_id,
-                    payload={
-                        "usage": final_usage,
-                        "cost": str(cost),
-                        "latency_ms": latency_ms,
-                    },
-                )
-            )
-
-            # Yield final metadata
-            yield (
-                "",
-                {
+            self._event_bus.emit(DomainEvent(
+                event_type=Events.MESSAGE_COMPLETED,
+                conversation_id=conversation_id,
+                payload={
                     "usage": final_usage,
-                    "cost": cost,
-                    "latency": latency_ms,
-                    "message_id": assistant_msg.id,
-                },
-            )
-
+                    "cost": str(cost),
+                    "latency_ms": latency_ms
+                }
+            ))
+            
+            # Yield final metadata
+            yield ("", {
+                "usage": final_usage,
+                "cost": cost,
+                "latency": latency_ms,
+                "message_id": assistant_msg.id
+            })
+        
         except Exception as e:
             # Record failure
             self._circuit._on_failure()
-
+            
             # Save partial message on error
             if assistant_content:
                 partial_msg = Message(
@@ -323,114 +289,47 @@ class ChatOrchestrator:
                     conversation_id=conversation_id,
                     role=MessageRole.ASSISTANT,
                     content=assistant_content + "\n[Error: Stream interrupted]",
-                    model_id=conv.model_id,
+                    model_id=conv.model_id
                 )
                 self._repo.add_message(partial_msg)
             raise e
-
+    
     def _calculate_cost(self, usage: TokenUsage, model: OpenRouterModel) -> Decimal:
         """Calculate cost from usage and pricing."""
         return usage.calculate_cost(
-            model.prompt_price or Decimal("0"), model.completion_price or Decimal("0")
+            model.prompt_price or Decimal("0"),
+            model.completion_price or Decimal("0")
         )
-
+    
     def get_conversation(self, conversation_id: UUID) -> Optional[Conversation]:
         """Get conversation by ID.
-
+        
         Args:
             conversation_id: Conversation ID
-
+            
         Returns:
             Conversation or None if not found
         """
         return self._repo.get_by_id(conversation_id)
-
+    
     def get_conversation_messages(self, conversation_id: UUID) -> List[Message]:
         """Get all messages for a conversation.
-
+        
         Args:
             conversation_id: Conversation ID
-
+            
         Returns:
             List of messages
         """
         return self._repo.get_messages(conversation_id)
-
+    
     def get_conversation_history(self, limit: int = 100) -> List[Conversation]:
         """Get conversation history.
-
+        
         Args:
             limit: Maximum number of conversations
-
+            
         Returns:
             List of conversations ordered by most recent
         """
         return self._repo.list_active(limit=limit)
-
-    def export_conversation(self, conversation_id: UUID, format: str = "json") -> str:
-        """Export a conversation to JSON or Markdown format.
-
-        Phase 6: Export Functionality - Export conversations for backup/sharing.
-
-        Args:
-            conversation_id: Conversation ID to export
-            format: Export format ("json" or "markdown")
-
-        Returns:
-            Exported conversation as string
-
-        Raises:
-            ConversationNotFoundError: If conversation doesn't exist
-            ValueError: If format is not supported
-        """
-        from neural_terminal.domain.exceptions import ConversationNotFoundError
-
-        if format not in ("json", "markdown"):
-            raise ValueError(f"Unsupported format: {format}. Use 'json' or 'markdown'")
-
-        conv = self._repo.get_by_id(conversation_id)
-        if not conv:
-            raise ConversationNotFoundError(str(conversation_id))
-
-        messages = self._repo.get_messages(conversation_id)
-
-        if format == "json":
-            import json
-            from datetime import datetime
-
-            export_data = {
-                "id": str(conv.id),
-                "title": conv.title,
-                "model_id": conv.model_id,
-                "created_at": conv.created_at.isoformat() if conv.created_at else None,
-                "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
-                "total_cost": str(conv.total_cost),
-                "total_tokens": conv.total_tokens,
-                "status": conv.status.value,
-                "messages": [
-                    {
-                        "id": str(msg.id),
-                        "role": msg.role.value,
-                        "content": msg.content,
-                        "timestamp": msg.created_at.isoformat()
-                        if msg.created_at
-                        else None,
-                        "model_id": msg.model_id,
-                        "latency_ms": msg.latency_ms,
-                    }
-                    for msg in messages
-                ],
-            }
-            return json.dumps(export_data, indent=2)
-
-        elif format == "markdown":
-            lines = [f"# {conv.title}", ""]
-
-            for msg in messages:
-                role_label = msg.role.value.capitalize()
-                lines.append(f"## {role_label}")
-                lines.append("")
-                lines.append(msg.content)
-                lines.append("")
-
-            return "\n".join(lines)

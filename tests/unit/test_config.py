@@ -31,7 +31,7 @@ class TestSettings:
         
         settings = TestSettings()
         
-        assert settings.openrouter_base_url == "https://openrouter.ai/api/v1"
+        assert settings.openrouter_base_url == "https://integrate.api.nvidia.com/v1"
         assert settings.openrouter_timeout == 60
         assert settings.app_env == "development"
         assert settings.log_level == "INFO"

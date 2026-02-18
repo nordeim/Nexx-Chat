@@ -6,6 +6,7 @@ Phase 0 Defect C-3 Fix:
 - Add _message_to_domain() converter
 - Use SessionLocal.remove() for cleanup
 """
+
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from decimal import Decimal
@@ -31,32 +32,32 @@ from neural_terminal.infrastructure.database import (
 
 class ConversationRepository(ABC):
     """Abstract base class for conversation repositories."""
-    
+
     @abstractmethod
     def get_by_id(self, conversation_id: UUID) -> Optional[Conversation]:
         """Retrieve a conversation by ID."""
         raise NotImplementedError
-    
+
     @abstractmethod
     def get_messages(self, conversation_id: UUID) -> List[Message]:
         """Retrieve all messages for a conversation.
-        
+
         Phase 0 Defect H-5 Fix:
             This method was missing but is required by ChatOrchestrator.
             Messages must be ordered by created_at ascending.
         """
         raise NotImplementedError
-    
+
     @abstractmethod
     def save(self, conversation: Conversation) -> None:
         """Save or update a conversation."""
         raise NotImplementedError
-    
+
     @abstractmethod
     def add_message(self, message: Message) -> None:
         """Add a message to a conversation."""
         raise NotImplementedError
-    
+
     @abstractmethod
     def list_active(self, limit: int = 50, offset: int = 0) -> List[Conversation]:
         """List active conversations ordered by updated_at descending."""
@@ -65,24 +66,24 @@ class ConversationRepository(ABC):
 
 class SQLiteConversationRepository(ConversationRepository):
     """Thread-safe SQLite implementation of conversation repository.
-    
+
     Phase 0 Defect C-3 Fix:
         Uses _session_scope() context manager for proper session lifecycle.
         SessionLocal.remove() is called in finally block to prevent leaks.
     """
-    
+
     @contextmanager
     def _session_scope(self) -> Generator[Session, None, None]:
         """Provide a transactional scope around a series of operations.
-        
+
         Yields:
             SQLAlchemy Session
-            
+
         Ensures:
             - Commit on success
-            - Rollback on exception  
+            - Rollback on exception
             - Session cleanup via scoped_session.remove()
-            
+
         Phase 0 Defect C-3 Fix:
             This replaces the broken _get_session()/_close_session() pattern
             that leaked sessions by creating orphaned context managers.
@@ -96,7 +97,7 @@ class SQLiteConversationRepository(ConversationRepository):
             raise
         finally:
             SessionLocal.remove()  # Critical for scoped_session cleanup
-    
+
     def _to_domain(self, orm: ConversationORM) -> Conversation:
         """Convert Conversation ORM to domain model."""
         return Conversation(
@@ -111,10 +112,10 @@ class SQLiteConversationRepository(ConversationRepository):
             parent_conversation_id=orm.parent_conversation_id,
             tags=orm.tags or [],
         )
-    
+
     def _message_to_domain(self, orm: MessageORM) -> Message:
         """Convert Message ORM to domain model.
-        
+
         Phase 0 Defect C-3 Fix:
             Properly reconstructs TokenUsage from individual token columns.
             Handles None values gracefully.
@@ -126,7 +127,7 @@ class SQLiteConversationRepository(ConversationRepository):
                 completion_tokens=orm.completion_tokens or 0,
                 total_tokens=orm.total_tokens or 0,
             )
-        
+
         return Message(
             id=orm.id,
             conversation_id=orm.conversation_id,
@@ -139,7 +140,7 @@ class SQLiteConversationRepository(ConversationRepository):
             created_at=orm.created_at,
             metadata=orm.meta or {},  # Note: 'meta' column stores metadata
         )
-    
+
     def get_by_id(self, conversation_id: UUID) -> Optional[Conversation]:
         """Retrieve a conversation by ID."""
         with self._session_scope() as session:
@@ -147,28 +148,32 @@ class SQLiteConversationRepository(ConversationRepository):
                 select(ConversationORM).where(ConversationORM.id == conversation_id)
             ).scalar_one_or_none()
             return self._to_domain(result) if result else None
-    
+
     def get_messages(self, conversation_id: UUID) -> List[Message]:
         """Retrieve all messages for a conversation, ordered by creation time.
-        
+
         Phase 0 Defect H-5 Fix:
             This method was missing from the original design but is required
             by ChatOrchestrator to retrieve conversation history for context.
-            
+
         Args:
             conversation_id: The conversation UUID
-            
+
         Returns:
             List of messages ordered by created_at ascending (oldest first)
         """
         with self._session_scope() as session:
-            results = session.execute(
-                select(MessageORM)
-                .where(MessageORM.conversation_id == conversation_id)
-                .order_by(MessageORM.created_at.asc())
-            ).scalars().all()
+            results = (
+                session.execute(
+                    select(MessageORM)
+                    .where(MessageORM.conversation_id == conversation_id)
+                    .order_by(MessageORM.created_at.asc())
+                )
+                .scalars()
+                .all()
+            )
             return [self._message_to_domain(r) for r in results]
-    
+
     def save(self, conversation: Conversation) -> None:
         """Save or update a conversation."""
         with self._session_scope() as session:
@@ -185,36 +190,109 @@ class SQLiteConversationRepository(ConversationRepository):
                 tags=conversation.tags,
             )
             session.merge(orm)  # Upsert
-    
+
     def add_message(self, message: Message) -> None:
         """Add a message to a conversation."""
         if message.conversation_id is None:
             raise ValueError("Message must belong to a conversation")
-        
+
         with self._session_scope() as session:
             orm = MessageORM(
                 id=message.id,
                 conversation_id=message.conversation_id,
                 role=message.role,
                 content=message.content,
-                prompt_tokens=message.token_usage.prompt_tokens if message.token_usage else None,
-                completion_tokens=message.token_usage.completion_tokens if message.token_usage else None,
-                total_tokens=message.token_usage.total_tokens if message.token_usage else None,
+                prompt_tokens=message.token_usage.prompt_tokens
+                if message.token_usage
+                else None,
+                completion_tokens=message.token_usage.completion_tokens
+                if message.token_usage
+                else None,
+                total_tokens=message.token_usage.total_tokens
+                if message.token_usage
+                else None,
                 cost=message.cost,
                 latency_ms=message.latency_ms,
                 model_id=message.model_id,
                 metadata=message.metadata,
             )
             session.add(orm)
-    
+
     def list_active(self, limit: int = 50, offset: int = 0) -> List[Conversation]:
-        """List active conversations ordered by updated_at descending."""
+        """List active conversations ordered by updated_at descending.
+
+        Phase 5: Soft Delete - Excludes DELETED conversations.
+        """
         with self._session_scope() as session:
-            results = session.execute(
-                select(ConversationORM)
-                .where(ConversationORM.status == ConversationStatus.ACTIVE)
-                .order_by(ConversationORM.updated_at.desc())
-                .limit(limit)
-                .offset(offset)
-            ).scalars().all()
+            results = (
+                session.execute(
+                    select(ConversationORM)
+                    .where(
+                        (ConversationORM.status == ConversationStatus.ACTIVE)
+                        | (ConversationORM.status == ConversationStatus.ARCHIVED)
+                        | (ConversationORM.status == ConversationStatus.FORKED)
+                    )
+                    .order_by(ConversationORM.updated_at.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+                .scalars()
+                .all()
+            )
             return [self._to_domain(r) for r in results]
+
+    def list_all(self, limit: int = 50, offset: int = 0) -> List[Conversation]:
+        """List all conversations including soft deleted.
+
+        Phase 5: Soft Delete - Includes all conversation statuses.
+
+        Args:
+            limit: Maximum number of conversations
+            offset: Number of conversations to skip
+
+        Returns:
+            List of all conversations
+        """
+        with self._session_scope() as session:
+            results = (
+                session.execute(
+                    select(ConversationORM)
+                    .order_by(ConversationORM.updated_at.desc())
+                    .limit(limit)
+                    .offset(offset)
+                )
+                .scalars()
+                .all()
+            )
+            return [self._to_domain(r) for r in results]
+
+    def soft_delete(self, conversation_id: UUID) -> None:
+        """Soft delete a conversation by setting status to DELETED.
+
+        Phase 5: Soft Delete - Marks conversation as deleted without
+        removing data from database.
+
+        Args:
+            conversation_id: The conversation UUID to delete
+        """
+        with self._session_scope() as session:
+            session.execute(
+                update(ConversationORM)
+                .where(ConversationORM.id == conversation_id)
+                .values(status=ConversationStatus.DELETED)
+            )
+
+    def restore_conversation(self, conversation_id: UUID) -> None:
+        """Restore a soft-deleted conversation to ACTIVE status.
+
+        Phase 5: Soft Delete - Restores conversation from deleted status.
+
+        Args:
+            conversation_id: The conversation UUID to restore
+        """
+        with self._session_scope() as session:
+            session.execute(
+                update(ConversationORM)
+                .where(ConversationORM.id == conversation_id)
+                .values(status=ConversationStatus.ACTIVE)
+            )
