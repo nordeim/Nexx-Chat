@@ -7,7 +7,9 @@ combining the StateManager from Phase 3 with application-level concerns.
 from typing import Optional, Dict, Any, List, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
+import logging
 import threading
+
 
 import streamlit as st
 
@@ -21,6 +23,9 @@ from neural_terminal.infrastructure.openrouter import OpenRouterClient
 from neural_terminal.infrastructure.token_counter import TokenCounter
 from neural_terminal.infrastructure.circuit_breaker import CircuitBreaker
 from neural_terminal.config import settings
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -380,35 +385,34 @@ class ApplicationState:
         Yields:
             Stream chunks
         """
-        import sys
-        print(f"[DEBUG] app_state.send_message called with: '{content}'", file=sys.stderr)
+        logger.debug("send_message called")
         
         from uuid import UUID
         
         if not self._orchestrator:
-            print(f"[DEBUG] Orchestrator not initialized", file=sys.stderr)
+            logger.error("Orchestrator not initialized")
             raise RuntimeError("Application not initialized")
         
         # Ensure streaming state is reset from any previous errors
-        print(f"[DEBUG] Resetting is_streaming to False", file=sys.stderr)
+        logger.debug("Resetting is_streaming to False")
         self.session.is_streaming = False
         
-        print(f"[DEBUG] Current conversation_id: {self.session.current_conversation_id}", file=sys.stderr)
+        logger.debug("Current conversation_id", conversation_id=self.session.current_conversation_id)
         
         if not self.session.current_conversation_id:
-            print(f"[DEBUG] No conversation exists, creating new one", file=sys.stderr)
+            logger.info("No conversation exists, creating new one")
             # Create new conversation with current default model
             conv_id = self.create_conversation(model_id=self.config.default_model)
-            print(f"[DEBUG] Created conversation with ID: {conv_id}", file=sys.stderr)
+            logger.info("Created conversation", conversation_id=str(conv_id))
         
-        print(f"[DEBUG] Setting is_streaming to True", file=sys.stderr)
+        logger.debug("Setting is_streaming to True")
         self.session.is_streaming = True
         self.session.streaming_content = ""
         
         try:
             # Convert string UUID to UUID object
             conv_id = UUID(self.session.current_conversation_id)
-            print(f"[DEBUG] About to call orchestrator.send_message", file=sys.stderr)
+            logger.debug("About to call orchestrator.send_message")
             
             async for delta, metadata in self._orchestrator.send_message(
                 conversation_id=conv_id,
@@ -416,18 +420,18 @@ class ApplicationState:
                 temperature=self.config.temperature,
             ):
                 # delta is the text chunk, metadata is None for streaming, dict for final
-                print(f"[DEBUG] Received delta: '{delta}', metadata: {metadata}", file=sys.stderr)
+                logger.debug("Received delta from stream")
                 if delta:
                     self.session.streaming_content += delta
                     yield delta
         
         except Exception as e:
-            print(f"[DEBUG] Exception in send_message: {e}", file=sys.stderr)
+            logger.exception("Exception in send_message")
             import traceback
-            traceback.print_exc(file=sys.stderr)
+        # Exception logged by logger.exception above
             raise
         finally:
-            print(f"[DEBUG] Finally block - resetting is_streaming to False", file=sys.stderr)
+            logger.debug("Finally block - resetting is_streaming to False")
             self.session.is_streaming = False
             self._update_stats()
     

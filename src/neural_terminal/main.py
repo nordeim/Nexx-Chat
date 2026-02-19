@@ -5,10 +5,14 @@ UI components and business logic.
 """
 
 import asyncio
+import logging
 from typing import Optional, List, Dict, Any, AsyncGenerator
 from decimal import Decimal
 
 import streamlit as st
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 from neural_terminal.app_state import ApplicationState, get_app_state, AppConfig
 from neural_terminal.components.styles import StyleManager, inject_css
@@ -70,15 +74,13 @@ class NeuralTerminalApp:
         
         # Initialize app state
         try:
-            import sys
-            print(f"[DEBUG] Starting app initialization...", file=sys.stderr)
+                        logger.info("Starting app initialization")
             self._app_state.initialize()
-            print(f"[DEBUG] App initialization completed successfully", file=sys.stderr)
+            logger.info("App initialization completed successfully")
         except Exception as e:
-            import sys
-            print(f"[DEBUG] App initialization failed: {e}", file=sys.stderr)
+                        logger.exception("App initialization failed")
             import traceback
-            traceback.print_exc(file=sys.stderr)
+            
             self._error_handler.show_startup_error(str(e))
             return
         
@@ -94,16 +96,14 @@ class NeuralTerminalApp:
         """Run the main application loop."""
         # Check if app is properly initialized
         if not self._app_state.is_initialized():
-            import sys
-            print(f"[DEBUG] App not initialized in run(), attempting to initialize...", file=sys.stderr)
+                        logger.info("App not initialized in run(), attempting to initialize")
             try:
                 self._app_state.initialize()
-                print(f"[DEBUG] App initialization completed in run()", file=sys.stderr)
+                logger.info("App initialization completed in run()")
             except Exception as e:
-                import sys
-                print(f"[DEBUG] App initialization failed in run(): {e}", file=sys.stderr)
+                                logger.exception("App initialization failed in run()")
                 import traceback
-                traceback.print_exc(file=sys.stderr)
+                
                 st.error("⚠️ Failed to initialize application. Please check the console for details.")
                 return
         
@@ -385,25 +385,24 @@ class NeuralTerminalApp:
         Args:
             content: Message content
         """
-        import sys
-        print(f"[DEBUG] _run_async_send called with: '{content}'", file=sys.stderr)
+                logger.debug("_run_async_send called")
         
         from neural_terminal.components.stream_bridge import run_async
         
         async def send():
-            print(f"[DEBUG] Async send function starting", file=sys.stderr)
+            logger.debug("Async send function starting")
             chunks = []
             try:
                 async for chunk in self._app_state.send_message(content):
-                    print(f"[DEBUG] Received chunk: '{chunk}'", file=sys.stderr)
+                    logger.debug("Received chunk from stream")
                     chunks.append(chunk)
                 result = "".join(chunks)
-                print(f"[DEBUG] Final result: '{result}'", file=sys.stderr)
+                logger.debug("Received final result")
                 return result
             except Exception as e:
-                print(f"[DEBUG] Exception in async send: {e}", file=sys.stderr)
+                logger.exception("Exception in async send")
                 import traceback
-                traceback.print_exc(file=sys.stderr)
+                
                 raise
         
         try:
@@ -415,9 +414,9 @@ class NeuralTerminalApp:
             
             st.rerun()
         except Exception as e:
-            print(f"[DEBUG] Exception in _run_async_send: {e}", file=sys.stderr)
+            logger.exception("Exception in _run_async_send")
             import traceback
-            traceback.print_exc(file=sys.stderr)
+            
             raise e
     
     def _on_model_change(self, model: str) -> None:

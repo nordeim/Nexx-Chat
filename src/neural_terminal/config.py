@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # Application
     app_env: Literal["development", "staging", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_format: Literal["console", "json"] = "console"
     database_url: str = Field(
         default="sqlite:///neural_terminal.db",
         pattern=r"^sqlite://.*$",  # Force SQLite for now

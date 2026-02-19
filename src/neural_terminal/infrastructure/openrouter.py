@@ -174,32 +174,32 @@ class OpenRouterClient:
                     
                     # Debug logging
                     import sys
-                    print(f"[DEBUG] Parsed chunk: {chunk}", file=sys.stderr)
+                    logger.debug("Parsed chunk")
                     
                     # Safely extract content with null checks
                     if chunk is None:
-                        print(f"[DEBUG] Chunk is None, continuing", file=sys.stderr)
+                        logger.debug("Chunk is None, continuing")
                         continue
                     
                     choices = chunk.get("choices", [])
-                    print(f"[DEBUG] Choices: {choices}", file=sys.stderr)
+                    logger.debug("Parsed choices from chunk")
                     
                     if not choices or not isinstance(choices, list):
-                        print(f"[DEBUG] No valid choices, continuing", file=sys.stderr)
+                        logger.debug("No valid choices, continuing")
                         continue
                     
                     first_choice = choices[0] if choices else {}
-                    print(f"[DEBUG] First choice: {first_choice}", file=sys.stderr)
+                    logger.debug("Extracted first choice")
                     
                     if first_choice is None:
-                        print(f"[DEBUG] First choice is None, continuing", file=sys.stderr)
+                        logger.debug("First choice is None, continuing")
                         continue
                     
                     delta = first_choice.get("delta", {}) or {}
-                    print(f"[DEBUG] Delta: {delta}", file=sys.stderr)
+                    logger.debug("Extracted delta from choice")
                     
                     content = delta.get("content", "") if delta else ""
-                    print(f"[DEBUG] Content: '{content}'", file=sys.stderr)
+                    logger.debug("Extracted content from delta")
                     
                     if content:
                         full_content += content

@@ -3,7 +3,7 @@
 Coordinates between repositories, external APIs, and event system.
 """
 
-import sys
+import logging
 import time
 from decimal import Decimal
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
@@ -13,12 +13,17 @@ from neural_terminal.application.events import DomainEvent, EventBus, Events
 from neural_terminal.config import settings
 from neural_terminal.infrastructure.input_sanitizer import InputSanitizer
 from neural_terminal.infrastructure.rate_limiter import RateLimiter, RateLimitConfig
+from neural_terminal.infrastructure.logging_config import configure_logging
 from neural_terminal.domain.exceptions import RateLimitExceededError, ValidationError
 from neural_terminal.domain.models import Conversation, Message, MessageRole, TokenUsage
 from neural_terminal.infrastructure.circuit_breaker import CircuitBreaker
 from neural_terminal.infrastructure.openrouter import OpenRouterClient, OpenRouterModel
 from neural_terminal.infrastructure.repositories import ConversationRepository
 from neural_terminal.infrastructure.token_counter import TokenCounter
+
+# Configure logging
+configure_logging(settings.log_level)
+logger = logging.getLogger(__name__)
 
 
 class ChatOrchestrator:
