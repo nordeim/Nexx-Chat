@@ -100,6 +100,33 @@ All 6 phases of the remediation plan have been completed successfully.
 
 ---
 
+### ✅ Phase 7: Debug Print Replacement
+**Status:** COMPLETE
+
+**Changes:**
+1. **Logging Infrastructure** (`src/neural_terminal/infrastructure/logging_config.py`):
+   - `configure_logging(log_level, json_format)` function
+   - `redact_sensitive_data()` processor for API keys and tokens
+   - `add_timestamp()` processor for ISO timestamps
+   - Console and JSON output formats
+
+2. **Logger Factory** (`src/neural_terminal/infrastructure/logger.py`):
+   - `get_logger(name)` factory function
+   - `LoggerMixin` class for easy logger integration
+
+3. **Replaced Prints:**
+   - `orchestrator.py`: 6 print statements → structured logging
+   - `app_state.py`: 0 prints (already clean)
+   - `openrouter.py`: 0 prints (already clean)
+   - `main.py`: 0 prints (already clean)
+
+4. **Configuration** (`src/neural_terminal/config.py`):
+   - Added `log_format` setting (console/json)
+
+**Tests:** `tests/unit/test_logging.py` (24 tests, all passing)
+
+---
+
 ## Test Summary
 
 | Phase | Test File | Status |
@@ -110,8 +137,9 @@ All 6 phases of the remediation plan have been completed successfully.
 | Phase 4 | `test_stream_bridge_thread_safety.py` | ✅ Pass |
 | Phase 5 | `test_soft_delete.py` | ✅ Pass (7 pass, 3 skip) |
 | Phase 6 | `test_export.py` | ✅ Pass |
+| Phase 7 | `test_logging.py` | ✅ Pass (24 tests) |
 
-**Total:** 393 passed, 3 skipped, 0 failed
+**Total:** 417 passed, 3 skipped, 0 failed
 
 ---
 
@@ -120,8 +148,11 @@ All 6 phases of the remediation plan have been completed successfully.
 ### Core Implementation Files:
 1. `src/neural_terminal/domain/exceptions.py` - Added RateLimitExceededError
 2. `src/neural_terminal/domain/models.py` - Added DELETED status
-3. `src/neural_terminal/config.py` - Added rate limiting settings
+3. `src/neural_terminal/config.py` - Added rate limiting settings and log_format
 4. `src/neural_terminal/infrastructure/rate_limiter.py` - NEW
+5. `src/neural_terminal/infrastructure/logging_config.py` - NEW
+6. `src/neural_terminal/infrastructure/logger.py` - NEW
+7. `src/neural_terminal/application/orchestrator.py` - Replaced prints with logging
 5. `src/neural_terminal/infrastructure/repositories.py` - Added soft delete
 6. `src/neural_terminal/components/message_renderer.py` - Bounded cache
 7. `src/neural_terminal/components/stream_bridge.py` - Thread safety

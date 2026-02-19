@@ -3,7 +3,6 @@
 Coordinates between repositories, external APIs, and event system.
 """
 
-import logging
 import time
 from decimal import Decimal
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
@@ -14,6 +13,7 @@ from neural_terminal.config import settings
 from neural_terminal.infrastructure.input_sanitizer import InputSanitizer
 from neural_terminal.infrastructure.rate_limiter import RateLimiter, RateLimitConfig
 from neural_terminal.infrastructure.logging_config import configure_logging
+from neural_terminal.infrastructure.logger import get_logger
 from neural_terminal.domain.exceptions import RateLimitExceededError, ValidationError
 from neural_terminal.domain.models import Conversation, Message, MessageRole, TokenUsage
 from neural_terminal.infrastructure.circuit_breaker import CircuitBreaker
@@ -23,7 +23,7 @@ from neural_terminal.infrastructure.token_counter import TokenCounter
 
 # Configure logging
 configure_logging(settings.log_level)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ChatOrchestrator:
@@ -158,26 +158,30 @@ class ChatOrchestrator:
         content = sanitized.content
         # Log suspicious patterns
         if sanitized.has_suspicious_patterns:
-            print(
-                f"[WARN] Suspicious patterns detected: {sanitized.warnings}",
-                file=sys.stderr,
+            logger.warning(
+                "Suspicious patterns detected in input",
+                warnings=sanitized.warnings,
             )
 
         # Check rate limit
         self._rate_limiter.acquire()
 
         # Load conversation
-        print(f"[DEBUG] Loading conversation {conversation_id}", file=sys.stderr)
+        logger.debug("Loading conversation", conversation_id=str(conversation_id))
         conv = self._repo.get_by_id(conversation_id)
         if not conv:
-            print(f"[DEBUG] Conversation not found!", file=sys.stderr)
+            logger.error("Conversation not found", conversation_id=str(conversation_id))
             raise ValidationError(f"Conversation {conversation_id} not found")
 
-        print(f"[DEBUG] Loaded conversation: model={conv.model_id}", file=sys.stderr)
+        logger.debug("Loaded conversation", model_id=conv.model_id)
 
         # Get model config for pricing
         model_config = self.get_model_config(conv.model_id)
-        print(f"[DEBUG] Model config: {model_config}", file=sys.stderr)
+        logger.debug(
+            "Retrieved model config",
+            model_id=conv.model_id,
+            has_config=model_config is not None,
+        )
 
         # Create user message
         user_msg = Message(
@@ -234,16 +238,12 @@ class ChatOrchestrator:
         self._circuit._check_state()
 
         try:
-            print(f"[DEBUG] Starting stream from openrouter", file=sys.stderr)
+            logger.debug("Starting stream from openrouter", model_id=conv.model_id)
             async for chunk in self._openrouter.chat_completion_stream(
                 messages=api_messages,
                 model=conv.model_id,
                 temperature=temperature,
             ):
-                print(
-                    f"[DEBUG] Received chunk from openrouter: {chunk}", file=sys.stderr
-                )
-
                 if chunk["type"] == "delta":
                     delta = chunk["content"]
                     assistant_content += delta
@@ -257,15 +257,16 @@ class ChatOrchestrator:
                         )
                     )
 
-                    print(f"[DEBUG] Yielding delta: '{delta}'", file=sys.stderr)
+                    logger.debug("Yielding delta", delta_length=len(delta))
                     yield (delta, None)
 
                 elif chunk["type"] == "final":
                     final_usage = chunk.get("usage")
                     latency_ms = chunk.get("latency_ms", 0)
-                    print(
-                        f"[DEBUG] Final chunk received, usage: {final_usage}",
-                        file=sys.stderr,
+                    logger.debug(
+                        "Final chunk received",
+                        has_usage=final_usage is not None,
+                        latency_ms=latency_ms,
                     )
 
             # Record success
