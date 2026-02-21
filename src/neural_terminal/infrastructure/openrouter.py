@@ -7,6 +7,7 @@ Phase 0 Defect C-4 Fix:
 Phase 0 Defect C-5 Fix:
     json module is imported at top of file.
 """
+
 import json  # C-5 FIX: Must be imported for SSE parsing
 import time
 from decimal import Decimal
@@ -23,23 +24,27 @@ from neural_terminal.domain.exceptions import (
     TokenLimitError,
 )
 from neural_terminal.domain.models import TokenUsage
+from neural_terminal.infrastructure.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class OpenRouterModel(BaseModel):
     """OpenRouter model information."""
+
     id: str
     name: str
     description: Optional[str] = None
     pricing: Dict[str, Optional[str]] = Field(default_factory=dict)
     context_length: Optional[int] = None
-    
+
     @property
     def prompt_price(self) -> Optional[Decimal]:
         """Get prompt price per 1K tokens."""
         if "prompt" in self.pricing and self.pricing["prompt"]:
             return Decimal(self.pricing["prompt"])
         return None
-    
+
     @property
     def completion_price(self) -> Optional[Decimal]:
         """Get completion price per 1K tokens."""
@@ -50,17 +55,17 @@ class OpenRouterModel(BaseModel):
 
 class OpenRouterClient:
     """Resilient OpenRouter API client."""
-    
+
     def __init__(self):
         """Initialize client with configuration."""
         self.base_url = settings.openrouter_base_url
         self.api_key = settings.openrouter_api_key.get_secret_value()
         self.timeout = settings.openrouter_timeout
         self._client: Optional[httpx.AsyncClient] = None
-    
+
     def update_api_key(self, api_key: str) -> None:
         """Update API key and reset client connection.
-        
+
         Args:
             api_key: New OpenRouter API key
         """
@@ -68,6 +73,7 @@ class OpenRouterClient:
         # Close existing client so new one is created with updated key
         if self._client is not None and not self._client.is_closed:
             import asyncio
+
             try:
                 asyncio.get_running_loop()
                 # If in async context, schedule close
@@ -76,7 +82,7 @@ class OpenRouterClient:
                 # No running loop, client will be recreated on next use
                 pass
         self._client = None
-    
+
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._client is None or self._client.is_closed:
@@ -90,23 +96,23 @@ class OpenRouterClient:
                 timeout=httpx.Timeout(self.timeout),
             )
         return self._client
-    
+
     async def get_available_models(self) -> List[OpenRouterModel]:
         """Fetch available models from OpenRouter."""
         client = await self._get_client()
-        
+
         response = await client.get("/models")
-        
+
         if response.status_code != 200:
             raise OpenRouterAPIError(
                 message=f"Failed to fetch models: {response.text}",
                 status_code=response.status_code,
                 response_body=response.text,
             )
-        
+
         data = response.json()
         return [OpenRouterModel(**m) for m in data.get("data", [])]
-    
+
     async def chat_completion_stream(
         self,
         messages: List[Dict[str, str]],
@@ -116,7 +122,7 @@ class OpenRouterClient:
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Streaming chat completion with SSE parsing."""
         client = await self._get_client()
-        
+
         payload = {
             "model": model,
             "messages": messages,
@@ -125,9 +131,9 @@ class OpenRouterClient:
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
-        
+
         start_time = time.time()
-        
+
         async with client.stream(
             "POST",
             "/chat/completions",
@@ -142,7 +148,10 @@ class OpenRouterClient:
                 raise ModelUnavailableError(model_id=model)
             elif response.status_code == 400:
                 body = await response.aread()
-                if "context" in body.decode().lower() or "token" in body.decode().lower():
+                if (
+                    "context" in body.decode().lower()
+                    or "token" in body.decode().lower()
+                ):
                     raise TokenLimitError()
                 raise OpenRouterAPIError(
                     message="Bad request",
@@ -156,51 +165,52 @@ class OpenRouterClient:
                     status_code=response.status_code,
                     response_body=body.decode(),
                 )
-            
+
             # Stream SSE data
             full_content = ""
             usage: Optional[TokenUsage] = None
-            
+
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
                     continue
-                
+
                 data = line[6:]
                 if data == "[DONE]":
                     break
-                
+
                 try:
                     chunk = json.loads(data)
-                    
+
                     # Debug logging
                     import sys
+
                     logger.debug("Parsed chunk")
-                    
+
                     # Safely extract content with null checks
                     if chunk is None:
                         logger.debug("Chunk is None, continuing")
                         continue
-                    
+
                     choices = chunk.get("choices", [])
                     logger.debug("Parsed choices from chunk")
-                    
+
                     if not choices or not isinstance(choices, list):
                         logger.debug("No valid choices, continuing")
                         continue
-                    
+
                     first_choice = choices[0] if choices else {}
                     logger.debug("Extracted first choice")
-                    
+
                     if first_choice is None:
                         logger.debug("First choice is None, continuing")
                         continue
-                    
+
                     delta = first_choice.get("delta", {}) or {}
                     logger.debug("Extracted delta from choice")
-                    
+
                     content = delta.get("content", "") if delta else ""
                     logger.debug("Extracted content from delta")
-                    
+
                     if content:
                         full_content += content
                         yield {
@@ -208,7 +218,7 @@ class OpenRouterClient:
                             "content": content,
                             "accumulated": full_content,
                         }
-                    
+
                     if "usage" in chunk and chunk["usage"] is not None:
                         u = chunk["usage"]
                         usage = TokenUsage(
@@ -218,7 +228,7 @@ class OpenRouterClient:
                         )
                 except json.JSONDecodeError:
                     continue
-            
+
             latency = int((time.time() - start_time) * 1000)
             yield {
                 "type": "final",
@@ -227,7 +237,7 @@ class OpenRouterClient:
                 "latency_ms": latency,
                 "model": model,
             }
-    
+
     async def close(self) -> None:
         """Close HTTP client."""
         if self._client and not self._client.is_closed:

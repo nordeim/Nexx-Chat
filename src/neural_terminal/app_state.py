@@ -433,16 +433,18 @@ class ApplicationState:
                     self.session.streaming_content += delta
                     yield delta
 
-        except Exception as e:
+        except Exception:
             logger.exception("Exception in send_message")
-            import traceback
-
-            # Exception logged by logger.exception above
             raise
         finally:
             logger.debug("Finally block - resetting is_streaming to False")
-            self.session.is_streaming = False
-            self._update_stats()
+            # Safely reset is_streaming - may fail if Streamlit is stopping
+            try:
+                self.session.is_streaming = False
+                self._update_stats()
+            except Exception:
+                # Ignore errors during cleanup (e.g., StopException during script stop)
+                pass
 
     def _update_stats(self) -> None:
         """Update session statistics."""

@@ -32,7 +32,7 @@ class TestSettings:
         settings = TestSettings()
         
         assert settings.openrouter_base_url == "https://integrate.api.nvidia.com/v1"
-        assert settings.openrouter_timeout == 60
+        assert settings.openrouter_timeout == 120
         assert settings.app_env == "development"
         assert settings.log_level == "INFO"
         assert settings.database_url == "sqlite:///neural_terminal.db"
@@ -134,7 +134,7 @@ class TestSettings:
         with pytest.raises(ValidationError):
             Settings()
         
-        monkeypatch.setenv("OPENROUTER_TIMEOUT", "400")
+        monkeypatch.setenv("OPENROUTER_TIMEOUT", "700")
         with pytest.raises(ValidationError):
             Settings()
 

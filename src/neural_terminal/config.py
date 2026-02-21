@@ -28,7 +28,7 @@ class Settings(BaseSettings):
         validation_alias="OPENROUTER_BASE_URL",
     )
     openrouter_timeout: int = Field(
-        default=60, ge=10, le=300, validation_alias="OPENROUTER_TIMEOUT"
+        default=120, ge=10, le=600, validation_alias="OPENROUTER_TIMEOUT"
     )
 
     # Application
