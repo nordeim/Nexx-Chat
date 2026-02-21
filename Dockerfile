@@ -100,7 +100,7 @@ COPY pyproject.toml poetry.lock* ./
 # These are the production dependencies only (no dev tools)
 RUN pip install --no-cache-dir \
     # Web Framework
-    streamlit httpx sqlalchemy alembic pydantic pydantic-settings tiktoken bleach markdown typing-extensions
+    streamlit httpx sqlalchemy alembic pydantic pydantic-settings tiktoken bleach markdown typing-extensions structlog
 
 # =============================================================================
 # APPLICATION CODE
